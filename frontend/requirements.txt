@@ -1,0 +1,6 @@
+streamlit==1.51.0
+requests==2.32.3
+plotly==6.1.2
+pandas==2.3.3
+Pillow==11.0.0
+python-dotenv==1.0.1

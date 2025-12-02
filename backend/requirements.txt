@@ -1,0 +1,16 @@
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+python-multipart==0.0.12
+pydantic==2.10.0
+pydantic-settings==2.6.0
+google-cloud-bigquery==3.28.0
+pandas==2.3.3
+numpy==2.3.4
+scikit-learn==1.7.2
+scikit-survival==0.25.0
+python-dotenv==1.0.1
+requests==2.32.3
+urllib3==2.2.3
+redis==5.2.0
