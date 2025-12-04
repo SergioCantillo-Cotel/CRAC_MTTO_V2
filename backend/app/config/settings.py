@@ -32,10 +32,17 @@ class Settings(BaseSettings):
     GCP_SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL: str
     GCP_SERVICE_ACCOUNT_CLIENT_CERT_URL: str
     
-    # CRM Configuration
-    CRM_BASE_URL: str
-    CRM_CLIENT_ID: str
-    CRM_CLIENT_SECRET: str
+    # CRM Configuration (YA NO SE USA DIRECTAMENTE - MANTENER POR COMPATIBILIDAD)
+    CRM_BASE_URL: str = ""
+    CRM_CLIENT_ID: str = ""
+    CRM_CLIENT_SECRET: str = ""
+    
+    # PostgreSQL Configuration (NUEVO - Para consultar mantenimientos)
+    POSTGRES_HOST: str = "localhost"
+    POSTGRES_PORT: int = 5432
+    POSTGRES_DB: str = "eficiencia_energetica"
+    POSTGRES_USER: str = ""
+    POSTGRES_PASSWORD: str = ""
     
     # Redis Configuration (opcional)
     REDIS_HOST: str = "localhost"

@@ -110,14 +110,19 @@ def render_tab2(api_client, risk_threshold: float, device_filter: Optional[List[
             st.info("📊 No hay dispositivos disponibles con los filtros actuales")
             return
         
-        # Slider para número de dispositivos
-        top_n = st.slider(
-            "❄️ Número de equipos a mostrar",
-            key="slider_tab2",
-            min_value=1,
-            max_value=len(devices_list),
-            value=min(5, len(devices_list))
-        )
+        # CORRECCIÓN: Evitar slider con min=max cuando hay solo 1 dispositivo
+        if len(devices_list) == 1:
+            top_n = 1
+            st.info(f"📊 Mostrando 1 equipo: {devices_list[0]}")
+        else:
+            # Slider para número de dispositivos
+            top_n = st.slider(
+                "❄️ Número de equipos a mostrar",
+                key="slider_tab2",
+                min_value=1,
+                max_value=len(devices_list),
+                value=min(5, len(devices_list))
+            )
         
         # Obtener predicciones batch
         with st.spinner("Calculando proyecciones de riesgo..."):

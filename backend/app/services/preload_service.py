@@ -1,11 +1,11 @@
 import logging
 import pandas as pd
 from datetime import datetime
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict
 from app.services.bigquery_service import get_bigquery_service
 from app.services.analytics_service import get_analytics_service
 from app.services.ml_service import get_ml_service
-from app.services.crm_service import get_crm_service
+from app.services.postgres_service import get_postgres_service
 from app.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class DataPreloadService:
     
     def refresh_all_data(self):
         """
-        Refresca todos los datos: BigQuery, CRM y entrena modelo ML
+        Refresca todos los datos: BigQuery, PostgreSQL (mantenimientos) y entrena modelo ML
         Esta función se ejecuta cada hora
         """
         if self._is_updating:
@@ -67,11 +67,11 @@ class DataPreloadService:
             df_processed = analytics_service.process_data(df_raw)
             logger.info(f"   ✅ Procesamiento: {len(df_processed)} registros válidos")
             
-            # 3. Obtener datos de mantenimiento del CRM
-            logger.info("🔗 [3/5] Consultando CRM...")
-            crm_service = get_crm_service()
+            # 3. Obtener datos de mantenimiento desde PostgreSQL (CAMBIO PRINCIPAL)
+            logger.info("🗄️ [3/5] Consultando PostgreSQL (mantenimientos)...")
+            postgres_service = get_postgres_service()
             seriales = df_raw['Serial_dispositivo'].dropna().unique()
-            df_mttos = crm_service.get_equipos_dataframe(list(seriales))
+            df_mttos = postgres_service.get_mantenimientos_dataframe(list(seriales))
             
             maintenance_dict = {}
             client_dict = {}
@@ -79,13 +79,10 @@ class DataPreloadService:
             model_dict = {}
             
             if df_mttos is not None and not df_mttos.empty:
-                df_mttos['serial'] = df_mttos['serial'].str.strip()
-                df_mttos['hora_salida'] = pd.to_datetime(df_mttos['hora_salida'], errors='coerce')
-                df_mttos = df_mttos.dropna(subset=['hora_salida'])
-                maintenance_dict, client_dict, brand_dict, model_dict = crm_service.get_maintenance_metadata(df_mttos)
-                logger.info(f"   ✅ CRM: {len(maintenance_dict)} registros de mantenimiento")
+                maintenance_dict, client_dict, brand_dict, model_dict = postgres_service.get_maintenance_metadata(df_mttos)
+                logger.info(f"   ✅ PostgreSQL: {len(maintenance_dict)} registros de mantenimiento")
             else:
-                logger.warning("   ⚠️ CRM: No se obtuvieron datos de mantenimiento")
+                logger.warning("   ⚠️ PostgreSQL: No se obtuvieron datos de mantenimiento")
             
             # 4. Detectar fallas y construir intervalos
             logger.info("🔍 [4/5] Detectando fallas y construyendo intervalos...")

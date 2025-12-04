@@ -6,9 +6,10 @@ from app.auth.users import user_db
 from app.services.bigquery_service import get_bigquery_service
 from app.services.analytics_service import get_analytics_service
 from app.services.ml_service import get_ml_service
-from app.services.crm_service import get_crm_service
+from app.services.postgres_service import get_postgres_service
 from app.config.settings import get_settings
 import pandas as pd
+import numpy as np
 from datetime import datetime
 
 router = APIRouter(prefix="/maintenance", tags=["Maintenance"])
@@ -60,7 +61,7 @@ async def get_maintenance_recommendations(
         bigquery_service = get_bigquery_service()
         analytics_service = get_analytics_service()
         ml_service = get_ml_service()
-        crm_service = get_crm_service()
+        postgres_service = get_postgres_service()
         
         # Verificar permisos
         user_info = user_db.get_user_info(current_user.username)
@@ -82,9 +83,9 @@ async def get_maintenance_recommendations(
         df_raw = analytics_service.completar_seriales(df_raw)
         df = analytics_service.process_data(df_raw)
         
-        # Obtener datos de mantenimiento desde CRM
-        seriales = df_raw['Serial_dispositivo'].unique()
-        df_mttos = crm_service.get_equipos_dataframe(seriales)
+        # Obtener datos de mantenimiento desde PostgreSQL
+        seriales = df_raw['Serial_dispositivo'].dropna().unique().tolist()
+        df_mttos = postgres_service.get_mantenimientos_dataframe(seriales)
         
         maintenance_dict = {}
         client_dict = {}
@@ -92,11 +93,7 @@ async def get_maintenance_recommendations(
         model_dict = {}
         
         if df_mttos is not None and not df_mttos.empty:
-            df_mttos['serial'] = df_mttos['serial'].str.strip()
-            df_mttos['hora_salida'] = pd.to_datetime(df_mttos['hora_salida'], errors='coerce')
-            df_mttos = df_mttos.dropna(subset=['hora_salida'])
-            
-            maintenance_dict, client_dict, brand_dict, model_dict = crm_service.get_maintenance_metadata(df_mttos)
+            maintenance_dict, client_dict, brand_dict, model_dict = postgres_service.get_maintenance_metadata(df_mttos)
         
         # Detectar fallas y construir intervalos
         df['is_failure_bool'] = ml_service.detect_failures(df, 'Descripcion', 'Severidad', settings.SEVERITY_THRESHOLD)
@@ -119,67 +116,77 @@ async def get_maintenance_recommendations(
         available_devices = sorted(df['Dispositivo'].unique())
         
         for device in available_devices:
-            prediction = ml_service.predict_risk(intervals, device, risk_threshold, 5000)
-            
-            if prediction and prediction['time_to_threshold'] > 0:
-                device_intervals = intervals[intervals['unit'] == device]
-                if len(device_intervals) > 0:
-                    latest_interval = device_intervals.iloc[-1]
-                    
-                    # Obtener información del dispositivo
-                    device_data = df[df['Dispositivo'] == device]
-                    serial = device_data['Serial_dispositivo'].iloc[0] if not device_data.empty else "N/A"
-                    modelo = model_dict.get(serial, device_data['Modelo'].iloc[0] if not device_data.empty else "N/A")
-                    marca = brand_dict.get(serial, "N/A")
-                    cliente = client_dict.get(serial, "No especificado")
-                    
-                    # Obtener último mantenimiento
-                    last_maintenance = maintenance_dict.get(serial)
-                    ultimo_mantenimiento = format_maintenance_date(last_maintenance)
-                    
-                    # Calcular riesgo actual
-                    feature_values = [float(latest_interval.get(f, 0)) for f in features]
-                    X_pred = pd.DataFrame([feature_values], columns=features)
-                    surv_func = rsf_model.predict_survival_function(X_pred)[0]
-                    current_time = float(latest_interval.get('current_time_elapsed', 0))
-                    
-                    import numpy as np
-                    current_risk = (1 - np.interp(current_time, surv_func.x, surv_func.y, 
-                                                  left=1.0, right=surv_func.y[-1])) * 100
-                    
-                    # Categorizar
-                    tiempo_dias = prediction['time_to_threshold'] / 24.0
-                    if tiempo_dias < 7:
-                        cat = "critico"
-                    elif tiempo_dias < 30:
-                        cat = "alto"
-                    else:
-                        cat = "planificar"
-                    
-                    # Filtrar por categoría si se especifica
-                    if categoria and categoria != "todos" and cat != categoria:
-                        continue
-                    
-                    # Obtener fallas y recomendaciones
-                    fallas = analytics_service.get_device_failures(df, device)
-                    recomendaciones = analytics_service.get_maintenance_recommendations(
-                        {'equipo': device}, df
-                    )
-                    
-                    recommendations.append(MaintenanceRecommendation(
-                        equipo=device,
-                        serial=serial,
-                        marca=marca,
-                        modelo=modelo,
-                        cliente=cliente,
-                        ultimo_mantenimiento=ultimo_mantenimiento,
-                        tiempo_hasta_umbral=prediction['time_to_threshold'],
-                        tiempo_hasta_umbral_dias=tiempo_dias,
-                        riesgo_actual=current_risk,
-                        categoria=cat,
-                        fallas_detectadas=fallas,
-                        recomendaciones=recomendaciones
-                    ))
+            try:
+                prediction = ml_service.predict_risk(intervals, device, risk_threshold, 5000)
+                
+                if prediction and prediction['time_to_threshold'] > 0:
+                    device_intervals = intervals[intervals['unit'] == device]
+                    if len(device_intervals) > 0:
+                        latest_interval = device_intervals.iloc[-1]
+                        
+                        # Obtener información del dispositivo - CORRECCIÓN: Verificar con shape[0]
+                        device_data = df[df['Dispositivo'] == device]
+                        if device_data.shape[0] == 0:
+                            continue
+                        
+                        serial = str(device_data['Serial_dispositivo'].iloc[0]) if pd.notna(device_data['Serial_dispositivo'].iloc[0]) else "N/A"
+                        modelo = model_dict.get(serial, str(device_data['Modelo'].iloc[0]) if pd.notna(device_data['Modelo'].iloc[0]) else "N/A")
+                        marca = brand_dict.get(serial, "N/A")
+                        cliente = client_dict.get(serial, "No especificado")
+                        
+                        # Obtener último mantenimiento
+                        last_maintenance = maintenance_dict.get(serial)
+                        ultimo_mantenimiento = format_maintenance_date(last_maintenance)
+                        
+                        # Calcular riesgo actual
+                        feature_values = [float(latest_interval.get(f, 0)) for f in features]
+                        X_pred = pd.DataFrame([feature_values], columns=features)
+                        surv_func = rsf_model.predict_survival_function(X_pred)[0]
+                        current_time = float(latest_interval.get('current_time_elapsed', 0))
+                        
+                        # CORRECCIÓN: Convertir a float explícitamente
+                        current_risk = float((1 - np.interp(current_time, surv_func.x, surv_func.y, 
+                                                      left=1.0, right=surv_func.y[-1])) * 100)
+                        
+                        # Categorizar
+                        tiempo_dias = float(prediction['time_to_threshold']) / 24.0
+                        if tiempo_dias < 7:
+                            cat = "critico"
+                        elif tiempo_dias < 30:
+                            cat = "alto"
+                        else:
+                            cat = "planificar"
+                        
+                        # Filtrar por categoría si se especifica
+                        if categoria and categoria != "todos" and cat != categoria:
+                            continue
+                        
+                        # Obtener fallas y recomendaciones
+                        fallas = analytics_service.get_device_failures(df, device)
+                        recomendaciones = analytics_service.get_maintenance_recommendations(
+                            {'equipo': device}, df
+                        )
+                        
+                        recommendations.append(MaintenanceRecommendation(
+                            equipo=device,
+                            serial=serial,
+                            marca=marca,
+                            modelo=modelo,
+                            cliente=cliente,
+                            ultimo_mantenimiento=ultimo_mantenimiento,
+                            tiempo_hasta_umbral=float(prediction['time_to_threshold']),
+                            tiempo_hasta_umbral_dias=float(tiempo_dias),
+                            riesgo_actual=float(current_risk),
+                            categoria=cat,
+                            fallas_detectadas=fallas,
+                            recomendaciones=recomendaciones
+                        ))
+            except Exception as e:
+                # Log error pero continuar con siguiente dispositivo
+                import traceback
+                print(f"Error procesando dispositivo {device}: {str(e)}")
+                print(traceback.format_exc())
+                continue
         
         # Ordenar por prioridad
         recommendations.sort(key=lambda x: (
@@ -192,6 +199,9 @@ async def get_maintenance_recommendations(
     except HTTPException:
         raise
     except Exception as e:
+        import traceback
+        print(f"Error obteniendo recomendaciones: {str(e)}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error obteniendo recomendaciones: {str(e)}")
 
 
@@ -211,10 +221,10 @@ async def get_maintenance_history(
         Historial de mantenimiento
     """
     try:
-        crm_service = get_crm_service()
+        postgres_service = get_postgres_service()
         
-        # Consultar CRM
-        df_mttos = crm_service.get_equipos_dataframe([serial])
+        # Consultar PostgreSQL
+        df_mttos = postgres_service.get_mantenimientos_dataframe([serial])
         
         if df_mttos is None or df_mttos.empty:
             return {
@@ -244,4 +254,7 @@ async def get_maintenance_history(
         }
         
     except Exception as e:
+        import traceback
+        print(f"Error obteniendo historial: {str(e)}")
+        print(traceback.format_exc())
         raise HTTPException(status_code=500, detail=f"Error obteniendo historial: {str(e)}")
