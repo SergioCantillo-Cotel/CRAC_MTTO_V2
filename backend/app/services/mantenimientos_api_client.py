@@ -1,6 +1,6 @@
 import requests
 import logging
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional, Tuple, Set
 from datetime import datetime
 import pandas as pd
 
@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 
 class MantenimientosAPIClient:
-    """Cliente para consumir el API REST de Mantenimientos en GCP"""
+    """Cliente para consumir el API REST de Mantenimientos en GCP - OPTIMIZADO"""
     
     def __init__(self):
         # Importar settings
@@ -23,8 +23,8 @@ class MantenimientosAPIClient:
             "Authorization": f"Bearer {self.bearer_token}",
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "Accept-Profile": "monitoreo_equipos",  # Especificar esquema correcto
-            "Content-Profile": "monitoreo_equipos"  # Para POST/PATCH
+            "Accept-Profile": "monitoreo_equipos",
+            "Content-Profile": "monitoreo_equipos"
         }
     
     def _make_request(self, method: str, endpoint: str, headers: Dict = None, **kwargs) -> Optional[Dict]:
@@ -86,8 +86,7 @@ class MantenimientosAPIClient:
         
         try:
             # El API espera un query parameter con los seriales
-            # Formato: ?serial=eq.SERIAL1&serial=eq.SERIAL2...
-            # O usar IN: ?serial=in.(SERIAL1,SERIAL2,SERIAL3)
+            # Formato: ?serial=in.(SERIAL1,SERIAL2,SERIAL3)
             
             seriales_str = ','.join(seriales)
             params = {'serial': f'in.({seriales_str})'}
@@ -122,6 +121,241 @@ class MantenimientosAPIClient:
             logger.error(traceback.format_exc())
             return []
     
+    # ========== OPTIMIZACIÓN: VERIFICACIÓN EN BATCH ==========
+    
+    def get_existing_keys_batch(self, seriales: List[str]) -> Set[Tuple[str, str, str]]:
+        """
+        Obtiene todas las claves existentes (serial, id_reporte, observaciones) en una sola consulta
+        
+        OPTIMIZACIÓN: En lugar de verificar uno por uno (550 peticiones HTTP),
+        obtenemos todos de una vez (1 petición HTTP)
+        
+        Args:
+            seriales: Lista de números de serie a consultar
+        
+        Returns:
+            Set de tuplas (serial, id_reporte, maintenance_remarks)
+        """
+        try:
+            logger.info(f"🚀 OPTIMIZACIÓN: Obteniendo registros existentes en batch para {len(seriales)} seriales...")
+            
+            # Obtener TODOS los mantenimientos de estos seriales de una vez
+            mantenimientos = self.get_mantenimientos_by_seriales(seriales)
+            
+            if not mantenimientos:
+                logger.info("✅ No hay registros existentes")
+                return set()
+            
+            # Crear conjunto de claves únicas
+            existing_keys = set()
+            
+            for record in mantenimientos:
+                serial = str(record.get('serial', '')).strip()
+                id_reporte = record.get('report_id')
+                maintenance_remarks = record.get('maintenance_remarks')
+                
+                # Normalizar valores None o vacíos a string vacío
+                if id_reporte is None or not id_reporte or str(id_reporte).strip() == 'None' or str(id_reporte).strip() == 'nan':
+                    id_reporte = ''
+                else:
+                    id_reporte = str(id_reporte).strip()
+                
+                if maintenance_remarks is None or not maintenance_remarks or str(maintenance_remarks).strip() == 'None' or str(maintenance_remarks).strip() == 'nan':
+                    maintenance_remarks = ''
+                else:
+                    maintenance_remarks = str(maintenance_remarks).strip()
+                
+                # Agregar tupla al conjunto
+                key = (serial, id_reporte, maintenance_remarks)
+                existing_keys.add(key)
+            
+            logger.info(f"✅ OPTIMIZACIÓN: Encontradas {len(existing_keys)} claves únicas existentes")
+            
+            return existing_keys
+            
+        except Exception as e:
+            logger.error(f"❌ Error obteniendo claves en batch: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return set()
+    
+    def check_if_exists_in_set(self, serial: str, id_reporte: str, maintenance_remarks: str, 
+                                existing_keys: Set[Tuple[str, str, str]]) -> bool:
+        """
+        Verifica si un registro existe en el conjunto pre-cargado
+        
+        OPTIMIZACIÓN: Verificación en memoria O(1) en lugar de petición HTTP
+        
+        Args:
+            serial: Número de serie
+            id_reporte: ID del reporte (puede ser None)
+            maintenance_remarks: Observaciones del reporte (puede ser None)
+            existing_keys: Conjunto de claves existentes
+        
+        Returns:
+            True si existe, False si no
+        """
+        # Normalizar valores None/vacíos a string vacío
+        if id_reporte is None or not id_reporte or str(id_reporte).strip() == 'None' or str(id_reporte).strip() == 'nan':
+            id_reporte = ''
+        else:
+            id_reporte = str(id_reporte).strip()
+        
+        if maintenance_remarks is None or not maintenance_remarks or str(maintenance_remarks).strip() == 'None' or str(maintenance_remarks).strip() == 'nan':
+            maintenance_remarks = ''
+        else:
+            maintenance_remarks = str(maintenance_remarks).strip()
+        
+        key = (str(serial).strip(), id_reporte, maintenance_remarks)
+        
+        return key in existing_keys
+    
+    # ========== MÉTODO ANTIGUO (MANTENER POR COMPATIBILIDAD) ==========
+    
+    def check_if_exists(self, serial: str, id_reporte: str, maintenance_remarks: str = "") -> bool:
+        """
+        Verifica si ya existe un registro para este serial + id_reporte + observaciones
+        
+        NOTA: Este método hace 1 petición HTTP por llamada (LENTO para batch)
+        Usar get_existing_keys_batch() para operaciones masivas
+        
+        Args:
+            serial: Número de serie
+            id_reporte: ID del reporte
+            maintenance_remarks: Observaciones del reporte (opcional)
+        
+        Returns:
+            True si existe, False si no
+        """
+        try:
+            # Normalizar valores vacíos
+            if not id_reporte or id_reporte == 'None' or id_reporte == 'nan':
+                id_reporte = ''
+            
+            if not maintenance_remarks or maintenance_remarks == 'None' or maintenance_remarks == 'nan':
+                maintenance_remarks = ''
+            
+            # Construir query
+            query_parts = [f"serial=eq.{serial}"]
+            
+            if id_reporte:
+                query_parts.append(f"report_id=eq.{id_reporte}")
+            else:
+                query_parts.append("report_id=is.null")
+            
+            if maintenance_remarks:
+                # Escapar caracteres especiales en URL
+                import urllib.parse
+                encoded_remarks = urllib.parse.quote(maintenance_remarks)
+                query_parts.append(f"maintenance_remarks=eq.{encoded_remarks}")
+            else:
+                query_parts.append("maintenance_remarks=is.null")
+            
+            query_string = "&".join(query_parts) + "&limit=1"
+            
+            response = self._make_request(
+                "GET",
+                f"/mantenimientos?{query_string}"
+            )
+            
+            if response is None:
+                return False
+            
+            # Si response es lista y tiene elementos, existe
+            if isinstance(response, list) and len(response) > 0:
+                return True
+            
+            return False
+            
+        except Exception as e:
+            logger.error(f"Error verificando existencia: {str(e)}")
+            return False
+    
+    # ========== INSERCIÓN EN BATCH ==========
+    
+    def upsert_mantenimiento_batch(self, records: List[Dict]) -> Tuple[int, int]:
+        """
+        Inserta múltiples mantenimientos en una sola petición
+        
+        OPTIMIZACIÓN: En lugar de 550 peticiones, hace 1 sola
+        
+        Args:
+            records: Lista de diccionarios con datos de mantenimientos
+        
+        Returns:
+            Tuple (exitosos, fallidos)
+        """
+        if not records:
+            return 0, 0
+        
+        try:
+            logger.info(f"📝 Insertando {len(records)} registros en batch...")
+            
+            headers = self.headers.copy()
+            
+            # PostgREST permite insert de arrays
+            response = self._make_request(
+                "POST",
+                "/mantenimientos",
+                json=records,  # Array completo
+                headers=headers
+            )
+            
+            if response is not None:
+                logger.info(f"✅ Batch insertado exitosamente: {len(records)} registros")
+                return len(records), 0
+            else:
+                logger.error(f"❌ Error en inserción batch")
+                return 0, len(records)
+                
+        except Exception as e:
+            logger.error(f"❌ Error en upsert_mantenimiento_batch: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return 0, len(records)
+    
+    # ========== MÉTODO ANTIGUO (MANTENER POR COMPATIBILIDAD) ==========
+    
+    def upsert_mantenimiento(self, data: Dict) -> bool:
+        """
+        Inserta o actualiza un mantenimiento (individual)
+        
+        NOTA: Este método hace 1 petición HTTP por llamada (LENTO para batch)
+        Usar upsert_mantenimiento_batch() para operaciones masivas
+        
+        Args:
+            data: Diccionario con datos del mantenimiento
+        
+        Returns:
+            True si exitoso, False en caso contrario
+        """
+        try:
+            logger.debug(f"📝 Insertando mantenimiento: {data.get('serial')}")
+            
+            headers = self.headers.copy()
+            
+            response = self._make_request(
+                "POST",
+                "/mantenimientos",
+                json=[data],  # PostgREST espera array
+                headers=headers
+            )
+            
+            if response is not None:
+                logger.debug(f"✅ Mantenimiento insertado: {data.get('serial')}")
+                return True
+            else:
+                logger.error(f"❌ Error insertando mantenimiento: {data.get('serial')}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"❌ Error en upsert_mantenimiento: {str(e)}")
+            import traceback
+            logger.error(traceback.format_exc())
+            return False
+    
+    # ========== MÉTODOS DE UTILIDAD ==========
+    
     def get_mantenimientos_dataframe(self, seriales: List[str]) -> Optional[pd.DataFrame]:
         """
         Obtiene mantenimientos como DataFrame
@@ -142,8 +376,6 @@ class MantenimientosAPIClient:
             df = pd.DataFrame(mantenimientos)
             
             # Renombrar columnas para compatibilidad con código existente
-            # El API devuelve: datetime_maintenance_end, customer_name, device_brand, device_model
-            # El código espera: hora_salida, cliente, marca, modelo
             column_mapping = {
                 'datetime_maintenance_end': 'hora_salida',
                 'customer_name': 'cliente',
@@ -231,93 +463,6 @@ class MantenimientosAPIClient:
             import traceback
             logger.error(traceback.format_exc())
             return {}, {}, {}, {}
-    
-    def check_if_exists(self, serial: str, fecha_mantenimiento: str) -> bool:
-        """
-        Verifica si ya existe un registro para este serial y fecha
-        
-        Args:
-            serial: Número de serie
-            fecha_mantenimiento: Fecha del mantenimiento (ISO format)
-        
-        Returns:
-            True si existe, False si no
-        """
-        try:
-            # Buscar por serial y fecha aproximada (mismo día)
-            # Extraer solo la fecha (sin hora)
-            fecha_str = fecha_mantenimiento.split('T')[0]
-            
-            response = self._make_request(
-                "GET",
-                f"/mantenimientos?serial=eq.{serial}&datetime_maintenance_end=gte.{fecha_str}T00:00:00&datetime_maintenance_end=lte.{fecha_str}T23:59:59&limit=1"
-            )
-            
-            if response is None:
-                return False
-            
-            # Si response es lista y tiene elementos, existe
-            if isinstance(response, list) and len(response) > 0:
-                return True
-            
-            return False
-            
-        except Exception as e:
-            logger.error(f"Error verificando existencia: {str(e)}")
-            return False
-    
-    def upsert_mantenimiento(self, data: Dict) -> bool:
-        """
-        Inserta o actualiza un mantenimiento (UPSERT)
-        Primero verifica si existe, luego decide si INSERT o UPDATE
-        
-        Args:
-            data: Diccionario con datos del mantenimiento
-        
-        Returns:
-            True si exitoso, False en caso contrario
-        """
-        try:
-            serial = data.get('serial')
-            fecha = data.get('datetime_maintenance_end')
-            
-            if not serial or not fecha:
-                logger.error("Serial o fecha faltante")
-                return False
-            
-            # Verificar si ya existe
-            exists = self.check_if_exists(serial, fecha)
-            
-            if exists:
-                logger.debug(f"⏭️  Serial {serial} ({fecha.split('T')[0]}) ya existe - omitiendo")
-                return True  # No es error, simplemente ya existe
-            
-            # Si no existe, insertar
-            logger.debug(f"📝 Insertando nuevo mantenimiento: {serial}")
-            
-            # PostgREST requiere array de objetos para insert
-            headers = self.headers.copy()
-            
-            response = self._make_request(
-                "POST",
-                "/mantenimientos",
-                json=[data],  # PostgREST espera array
-                headers=headers
-            )
-            
-            # PostgREST retorna 201 Created en success
-            if response is not None:
-                logger.debug(f"✅ Mantenimiento insertado: {serial}")
-                return True
-            else:
-                logger.error(f"❌ Error insertando mantenimiento: {serial}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"❌ Error en upsert_mantenimiento: {str(e)}")
-            import traceback
-            logger.error(traceback.format_exc())
-            return False
     
     def test_connection(self) -> bool:
         """
