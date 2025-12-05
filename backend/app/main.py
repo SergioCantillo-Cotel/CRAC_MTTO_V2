@@ -5,6 +5,7 @@ from app.config.settings import get_settings
 from app.api import auth, devices, predictions, maintenance
 from app.services.scheduler_service import get_scheduler_service
 from app.services.preload_service import get_preload_service
+from app.services.sync_startup_service import get_sync_startup_service
 import time
 import logging
 
@@ -22,7 +23,7 @@ settings = get_settings()
 app = FastAPI(
     title=settings.APP_NAME,
     description="API para monitoreo predictivo de equipos CRAC",
-    version="1.0.0",
+    version="3.0.0",
     docs_url="/api/docs",
     redoc_url="/api/redoc"
 )
@@ -74,7 +75,7 @@ async def health_check():
     return {
         "status": "healthy",
         "service": settings.APP_NAME,
-        "version": "1.0.0"
+        "version": "3.0.0"
     }
 
 
@@ -108,13 +109,28 @@ async def force_refresh():
     }
 
 
+@app.post("/system/sync")
+async def force_sync():
+    """Fuerza una sincronización inmediata desde el CRM"""
+    sync_service = get_sync_startup_service()
+    
+    # Ejecutar sincronización
+    stats = sync_service.sync_on_startup()
+    
+    return {
+        "success": True,
+        "message": "Sincronización completada",
+        "statistics": stats
+    }
+
+
 # Root endpoint
 @app.get("/")
 async def root():
     """Endpoint raíz con información de la API"""
     return {
         "message": "CRAC Monitoring API",
-        "version": "1.0.0",
+        "version": "3.0.0",
         "docs": "/api/docs",
         "health": "/health"
     }
@@ -132,21 +148,38 @@ app.include_router(maintenance.router, prefix=settings.API_V1_PREFIX)
 async def startup_event():
     """Acciones al iniciar la aplicación"""
     logger.info("=" * 80)
-    logger.info(f"🚀 {settings.APP_NAME} iniciado")
+    logger.info(f"🚀 {settings.APP_NAME} v3.0.0 iniciado")
     logger.info(f"📚 Documentación disponible en: /api/docs")
     logger.info(f"🔒 CORS habilitado para: {settings.allowed_origins_list}")
     logger.info("=" * 80)
     
-    # Iniciar servicio de pre-carga
-    logger.info("🔄 Iniciando servicio de pre-carga de datos...")
+    # 1. Sincronizar datos del CRM al API de Mantenimientos
+    logger.info("🔄 Paso 1: Sincronizando datos del CRM...")
+    sync_service = get_sync_startup_service()
+    
+    try:
+        stats = sync_service.sync_on_startup()
+        
+        if stats['registros_nuevos'] > 0:
+            logger.info(f"✅ Sincronización exitosa: {stats['registros_nuevos']} registros nuevos insertados")
+        elif stats['registros_existentes'] > 0:
+            logger.info(f"✅ Sincronización: {stats['registros_existentes']} registros ya existían (sin cambios)")
+        else:
+            logger.warning("⚠️ Sincronización completada sin registros nuevos")
+    except Exception as e:
+        logger.error(f"❌ Error en sincronización inicial: {str(e)}")
+        logger.warning("⚠️ Continuando con inicio del sistema...")
+    
+    # 2. Iniciar servicio de pre-carga
+    logger.info("🔄 Paso 2: Iniciando servicio de pre-carga de datos...")
     preload_service = get_preload_service()
     
     # Cargar datos iniciales
     logger.info("📊 Cargando datos iniciales (esto puede tomar 20-30 segundos)...")
     preload_service.refresh_all_data()
     
-    # Programar actualización cada hora en punto
-    logger.info("⏰ Programando actualización automática cada hora...")
+    # 3. Programar actualización cada hora en punto
+    logger.info("⏰ Paso 3: Programando actualización automática cada hora...")
     scheduler = get_scheduler_service()
     scheduler.schedule_task(
         task_name="refresh_data",

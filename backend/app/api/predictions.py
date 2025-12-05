@@ -7,7 +7,7 @@ from app.auth.users import user_db
 from app.services.bigquery_service import get_bigquery_service
 from app.services.analytics_service import get_analytics_service
 from app.services.ml_service import get_ml_service
-from app.services.postgres_service import get_postgres_service
+from app.services.mantenimientos_api_client import get_mantenimientos_api_client
 from app.config.settings import get_settings
 import pandas as pd
 import numpy as np
@@ -45,7 +45,7 @@ async def get_device_prediction(
         bigquery_service = get_bigquery_service()
         analytics_service = get_analytics_service()
         ml_service = get_ml_service()
-        postgres_service = get_postgres_service()
+        api_client = get_mantenimientos_api_client()
         
         # Obtener datos
         dispositivos_excluir = [
@@ -68,13 +68,13 @@ async def get_device_prediction(
         df_raw = analytics_service.completar_seriales(df_raw)
         df = analytics_service.process_data(df_raw)
         
-        # Obtener datos de mantenimiento desde PostgreSQL
+        # Obtener datos de mantenimiento desde API REST (CAMBIO)
         seriales = df_raw['Serial_dispositivo'].dropna().unique().tolist()
-        df_mttos = postgres_service.get_mantenimientos_dataframe(seriales)
+        df_mttos = api_client.get_mantenimientos_dataframe(seriales)
         
         maintenance_dict = {}
         if df_mttos is not None and not df_mttos.empty:
-            maintenance_dict, _, _, _ = postgres_service.get_maintenance_metadata(df_mttos)
+            maintenance_dict, _, _, _ = api_client.get_maintenance_metadata(df_mttos)
         
         # Detectar fallas y construir intervalos
         df['is_failure_bool'] = ml_service.detect_failures(df, 'Descripcion', 'Severidad', settings.SEVERITY_THRESHOLD)
@@ -159,7 +159,7 @@ async def get_batch_predictions(
         bigquery_service = get_bigquery_service()
         analytics_service = get_analytics_service()
         ml_service = get_ml_service()
-        postgres_service = get_postgres_service()
+        api_client = get_mantenimientos_api_client()
         
         # Verificar permisos
         user_info = user_db.get_user_info(current_user.username)
@@ -181,13 +181,13 @@ async def get_batch_predictions(
         df_raw = analytics_service.completar_seriales(df_raw)
         df = analytics_service.process_data(df_raw)
         
-        # Obtener datos de mantenimiento desde PostgreSQL
+        # Obtener datos de mantenimiento desde API REST (CAMBIO)
         seriales = df_raw['Serial_dispositivo'].dropna().unique().tolist()
-        df_mttos = postgres_service.get_mantenimientos_dataframe(seriales)
+        df_mttos = api_client.get_mantenimientos_dataframe(seriales)
         
         maintenance_dict = {}
         if df_mttos is not None and not df_mttos.empty:
-            maintenance_dict, _, _, _ = postgres_service.get_maintenance_metadata(df_mttos)
+            maintenance_dict, _, _, _ = api_client.get_maintenance_metadata(df_mttos)
         
         # Detectar fallas y construir intervalos
         df['is_failure_bool'] = ml_service.detect_failures(df, 'Descripcion', 'Severidad', settings.SEVERITY_THRESHOLD)
@@ -209,7 +209,6 @@ async def get_batch_predictions(
         predictions = []
         
         for dispositivo in request.dispositivos:
-            # CORRECCIÓN: Usar isin() correctamente para verificar si existe
             if not df[df['Dispositivo'] == dispositivo].shape[0] > 0:
                 continue
             
@@ -231,7 +230,6 @@ async def get_batch_predictions(
             surv_func = rsf_model.predict_survival_function(X_pred)[0]
             current_time = float(latest_interval.get('current_time_elapsed', 0))
             
-            # CORRECCIÓN: Asegurar que el resultado es un float escalar
             current_risk = float((1 - np.interp(current_time, surv_func.x, surv_func.y, 
                                          left=1.0, right=surv_func.y[-1])) * 100)
             

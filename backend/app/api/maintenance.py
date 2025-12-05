@@ -6,11 +6,14 @@ from app.auth.users import user_db
 from app.services.bigquery_service import get_bigquery_service
 from app.services.analytics_service import get_analytics_service
 from app.services.ml_service import get_ml_service
-from app.services.postgres_service import get_postgres_service
+from app.services.mantenimientos_api_client import get_mantenimientos_api_client
 from app.config.settings import get_settings
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/maintenance", tags=["Maintenance"])
 settings = get_settings()
@@ -61,7 +64,7 @@ async def get_maintenance_recommendations(
         bigquery_service = get_bigquery_service()
         analytics_service = get_analytics_service()
         ml_service = get_ml_service()
-        postgres_service = get_postgres_service()
+        api_client = get_mantenimientos_api_client()
         
         # Verificar permisos
         user_info = user_db.get_user_info(current_user.username)
@@ -83,9 +86,9 @@ async def get_maintenance_recommendations(
         df_raw = analytics_service.completar_seriales(df_raw)
         df = analytics_service.process_data(df_raw)
         
-        # Obtener datos de mantenimiento desde PostgreSQL
+        # Obtener datos de mantenimiento desde API REST (CAMBIO)
         seriales = df_raw['Serial_dispositivo'].dropna().unique().tolist()
-        df_mttos = postgres_service.get_mantenimientos_dataframe(seriales)
+        df_mttos = api_client.get_mantenimientos_dataframe(seriales)
         
         maintenance_dict = {}
         client_dict = {}
@@ -93,7 +96,7 @@ async def get_maintenance_recommendations(
         model_dict = {}
         
         if df_mttos is not None and not df_mttos.empty:
-            maintenance_dict, client_dict, brand_dict, model_dict = postgres_service.get_maintenance_metadata(df_mttos)
+            maintenance_dict, client_dict, brand_dict, model_dict = api_client.get_maintenance_metadata(df_mttos)
         
         # Detectar fallas y construir intervalos
         df['is_failure_bool'] = ml_service.detect_failures(df, 'Descripcion', 'Severidad', settings.SEVERITY_THRESHOLD)
@@ -124,7 +127,7 @@ async def get_maintenance_recommendations(
                     if len(device_intervals) > 0:
                         latest_interval = device_intervals.iloc[-1]
                         
-                        # Obtener información del dispositivo - CORRECCIÓN: Verificar con shape[0]
+                        # Obtener información del dispositivo
                         device_data = df[df['Dispositivo'] == device]
                         if device_data.shape[0] == 0:
                             continue
@@ -144,7 +147,6 @@ async def get_maintenance_recommendations(
                         surv_func = rsf_model.predict_survival_function(X_pred)[0]
                         current_time = float(latest_interval.get('current_time_elapsed', 0))
                         
-                        # CORRECCIÓN: Convertir a float explícitamente
                         current_risk = float((1 - np.interp(current_time, surv_func.x, surv_func.y, 
                                                       left=1.0, right=surv_func.y[-1])) * 100)
                         
@@ -182,10 +184,9 @@ async def get_maintenance_recommendations(
                             recomendaciones=recomendaciones
                         ))
             except Exception as e:
-                # Log error pero continuar con siguiente dispositivo
                 import traceback
-                print(f"Error procesando dispositivo {device}: {str(e)}")
-                print(traceback.format_exc())
+                logger.error(f"Error procesando dispositivo {device}: {str(e)}")
+                logger.error(traceback.format_exc())
                 continue
         
         # Ordenar por prioridad
@@ -221,12 +222,12 @@ async def get_maintenance_history(
         Historial de mantenimiento
     """
     try:
-        postgres_service = get_postgres_service()
+        api_client = get_mantenimientos_api_client()
         
-        # Consultar PostgreSQL
-        df_mttos = postgres_service.get_mantenimientos_dataframe([serial])
+        # Consultar API de Mantenimientos (CAMBIO)
+        mantenimientos_list = api_client.get_mantenimientos_by_seriales([serial])
         
-        if df_mttos is None or df_mttos.empty:
+        if not mantenimientos_list:
             return {
                 "serial": serial,
                 "mantenimientos": [],
@@ -234,7 +235,21 @@ async def get_maintenance_history(
             }
         
         # Procesar datos
-        df_mttos['hora_salida'] = pd.to_datetime(df_mttos['hora_salida'], errors='coerce')
+        df_mttos = pd.DataFrame(mantenimientos_list)
+        
+        # Renombrar columnas si es necesario
+        if 'datetime_maintenance_end' in df_mttos.columns:
+            df_mttos['hora_salida'] = pd.to_datetime(df_mttos['datetime_maintenance_end'], errors='coerce')
+        
+        if 'customer_name' in df_mttos.columns:
+            df_mttos['cliente'] = df_mttos['customer_name']
+        
+        if 'device_brand' in df_mttos.columns:
+            df_mttos['marca'] = df_mttos['device_brand']
+        
+        if 'device_model' in df_mttos.columns:
+            df_mttos['modelo'] = df_mttos['device_model']
+        
         df_mttos = df_mttos.dropna(subset=['hora_salida'])
         df_mttos = df_mttos.sort_values('hora_salida', ascending=False)
         

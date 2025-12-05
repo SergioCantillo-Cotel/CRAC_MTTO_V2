@@ -32,17 +32,14 @@ class Settings(BaseSettings):
     GCP_SERVICE_ACCOUNT_AUTH_PROVIDER_CERT_URL: str
     GCP_SERVICE_ACCOUNT_CLIENT_CERT_URL: str
     
-    # CRM Configuration (YA NO SE USA DIRECTAMENTE - MANTENER POR COMPATIBILIDAD)
-    CRM_BASE_URL: str = ""
+    # CRM Configuration (para sincronización inicial)
+    CRM_BASE_URL: str = "https://crmcotel.com.co"
     CRM_CLIENT_ID: str = ""
     CRM_CLIENT_SECRET: str = ""
     
-    # PostgreSQL Configuration (NUEVO - Para consultar mantenimientos)
-    POSTGRES_HOST: str = "localhost"
-    POSTGRES_PORT: int = 5432
-    POSTGRES_DB: str = "eficiencia_energetica"
-    POSTGRES_USER: str = ""
-    POSTGRES_PASSWORD: str = ""
+    # API Externa de Mantenimientos (NUEVO en v3.0.0)
+    MANTENIMIENTOS_API_URL: str = "https://api-bd-eficiencia-energetica-853514779938.us-central1.run.app"
+    MANTENIMIENTOS_API_TOKEN: str
     
     # Redis Configuration (opcional)
     REDIS_HOST: str = "localhost"
@@ -77,6 +74,8 @@ class Settings(BaseSettings):
     class Config:
         env_file = ".env"
         case_sensitive = True
+        # IMPORTANTE: Permitir campos extra si es necesario
+        # extra = "allow"  # Descomentar si necesitas flexibilidad
 
 
 @lru_cache()

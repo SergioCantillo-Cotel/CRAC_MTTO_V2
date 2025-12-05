@@ -5,7 +5,7 @@ from typing import Optional, Dict
 from app.services.bigquery_service import get_bigquery_service
 from app.services.analytics_service import get_analytics_service
 from app.services.ml_service import get_ml_service
-from app.services.postgres_service import get_postgres_service
+from app.services.mantenimientos_api_client import get_mantenimientos_api_client
 from app.config.settings import get_settings
 
 logger = logging.getLogger(__name__)
@@ -32,7 +32,7 @@ class DataPreloadService:
     
     def refresh_all_data(self):
         """
-        Refresca todos los datos: BigQuery, PostgreSQL (mantenimientos) y entrena modelo ML
+        Refresca todos los datos: BigQuery, API de Mantenimientos y entrena modelo ML
         Esta función se ejecuta cada hora
         """
         if self._is_updating:
@@ -67,22 +67,32 @@ class DataPreloadService:
             df_processed = analytics_service.process_data(df_raw)
             logger.info(f"   ✅ Procesamiento: {len(df_processed)} registros válidos")
             
-            # 3. Obtener datos de mantenimiento desde PostgreSQL (CAMBIO PRINCIPAL)
-            logger.info("🗄️ [3/5] Consultando PostgreSQL (mantenimientos)...")
-            postgres_service = get_postgres_service()
-            seriales = df_raw['Serial_dispositivo'].dropna().unique()
-            df_mttos = postgres_service.get_mantenimientos_dataframe(list(seriales))
+            # 3. Obtener datos de mantenimiento desde API REST (CAMBIO PRINCIPAL)
+            logger.info("🌐 [3/5] Consultando API de Mantenimientos...")
+            api_client = get_mantenimientos_api_client()
             
-            maintenance_dict = {}
-            client_dict = {}
-            brand_dict = {}
-            model_dict = {}
-            
-            if df_mttos is not None and not df_mttos.empty:
-                maintenance_dict, client_dict, brand_dict, model_dict = postgres_service.get_maintenance_metadata(df_mttos)
-                logger.info(f"   ✅ PostgreSQL: {len(maintenance_dict)} registros de mantenimiento")
+            # Probar conexión
+            if not api_client.test_connection():
+                logger.warning("   ⚠️ No se pudo conectar al API de Mantenimientos")
+                logger.warning("   ⚠️ Continuando sin datos de mantenimiento")
+                maintenance_dict = {}
+                client_dict = {}
+                brand_dict = {}
+                model_dict = {}
             else:
-                logger.warning("   ⚠️ PostgreSQL: No se obtuvieron datos de mantenimiento")
+                seriales = df_raw['Serial_dispositivo'].dropna().unique().tolist()
+                df_mttos = api_client.get_mantenimientos_dataframe(seriales)
+                
+                maintenance_dict = {}
+                client_dict = {}
+                brand_dict = {}
+                model_dict = {}
+                
+                if df_mttos is not None and not df_mttos.empty:
+                    maintenance_dict, client_dict, brand_dict, model_dict = api_client.get_maintenance_metadata(df_mttos)
+                    logger.info(f"   ✅ API: {len(maintenance_dict)} registros de mantenimiento")
+                else:
+                    logger.warning("   ⚠️ API: No se obtuvieron datos de mantenimiento")
             
             # 4. Detectar fallas y construir intervalos
             logger.info("🔍 [4/5] Detectando fallas y construyendo intervalos...")

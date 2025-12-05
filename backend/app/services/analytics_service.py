@@ -3,7 +3,6 @@ import numpy as np
 from typing import List, Dict, Optional
 from app.services.ml_service import get_ml_service
 from app.services.bigquery_service import get_bigquery_service
-from app.services.crm_service import get_crm_service
 
 
 # Mapeo de equipos a seriales
@@ -40,7 +39,8 @@ class AnalyticsService:
     def __init__(self):
         self.ml_service = get_ml_service()
         self.bigquery_service = get_bigquery_service()
-        self.crm_service = get_crm_service()
+        # ELIMINADO: self.crm_service = get_crm_service()
+        # Ya no se necesita porque usamos el API de mantenimientos directamente
     
     def completar_seriales(self, df: pd.DataFrame) -> pd.DataFrame:
         """Completa seriales faltantes usando el mapeo"""

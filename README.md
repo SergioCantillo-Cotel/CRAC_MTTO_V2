@@ -1,6 +1,6 @@
 # 🏢 Command Center CRAC - Monitoreo Predictivo
 
-Sistema de monitoreo predictivo para equipos CRAC con arquitectura Backend (FastAPI) + Frontend (Streamlit) + CRM Sync API.
+Sistema de monitoreo predictivo para equipos CRAC con arquitectura Backend (FastAPI) + Frontend (Streamlit) + API Externa de Mantenimientos.
 
 ## ✨ Características
 
@@ -9,8 +9,8 @@ Sistema de monitoreo predictivo para equipos CRAC con arquitectura Backend (Fast
 - 🤖 **Machine Learning**: Predicción de fallas con Random Survival Forest
 - 📈 **Proyecciones de Riesgo**: Curvas de supervivencia y análisis predictivo
 - 🎯 **Recomendaciones Inteligentes**: Priorización de mantenimiento preventivo
-- 🔄 **Arquitectura Desacoplada**: Backend, Frontend y CRM Sync completamente separados
-- 🗄️ **PostgreSQL**: Cache persistente de datos del CRM
+- 🔄 **Arquitectura Desacoplada**: Backend y Frontend completamente separados
+- 🌐 **Integración API Externa**: Consume API REST para datos de mantenimiento
 - 🐳 **Docker Ready**: Despliegue fácil con Docker Compose
 
 ## 🏗️ Arquitectura
@@ -31,63 +31,70 @@ Sistema de monitoreo predictivo para equipos CRAC con arquitectura Backend (Fast
 │     Negocio         │
 └─────────┬───────────┘
           │
-    ┌─────┴────┬──────────┐
-    ▼          ▼          ▼
-┌────────┐ ┌──────────┐ ┌────────┐
-│BigQuery│ │PostgreSQL│ │  ...   │
-│        │ │          │ │        │
-└────────┘ └────┬─────┘ └────────┘
-                │
-                ▼
-        ┌───────────────┐
-        │  CRM Sync API │  Puerto 8001
-        │   (FastAPI)   │
-        │ - Sincroniza  │
-        │   CRM → PG    │
-        └───────┬───────┘
-                │
-                ▼
-           ┌────────┐
-           │  CRM   │
-           │  API   │
-           └────────┘
+    ┌─────┴────┬──────────────────┐
+    ▼          ▼                  ▼
+┌────────┐ ┌──────────┐  ┌───────────────────┐
+│BigQuery│ │  Otros   │  │ Mantenimientos API│
+│        │ │Servicios │  │  (GCP - External) │
+└────────┘ └──────────┘  └─────────┬─────────┘
+                                    │
+                                    ▼
+                              ┌──────────┐
+                              │PostgreSQL│
+                              └──────────┘
 ```
 
 ## 🔧 Requisitos
 
 ### Requisitos del Sistema
 - Python 3.11+
-- PostgreSQL 12+ (con acceso vía ProxySQL en WSL)
 - Docker & Docker Compose (opcional pero recomendado)
 - 4GB RAM mínimo
 - Acceso a BigQuery
-- Acceso a CRM API
+- Acceso a API de Mantenimientos (GCP)
 
 ## 🚀 Instalación
 
-### Paso 1: Configurar Base de Datos
+### Paso 1: Clonar Repositorio
 
 ```bash
-# Conectar a PostgreSQL
-psql -h localhost -p 5432 -U tu_usuario -d eficiencia_energetica
-
-# Ejecutar script de inicialización
-\i database/init_mantenimientos.sql
+git clone <repository-url>
+cd crac-monitoring-new
 ```
 
 ### Paso 2: Configurar Variables de Entorno
 
+#### Backend
 ```bash
-# CRM Sync API
-cp crm-sync-api/.env.example crm-sync-api/.env
-# Editar con credenciales reales
-
-# Backend
 cp backend/.env.example backend/.env
-# Agregar configuración de PostgreSQL
+# Editar con credenciales reales
+```
 
-# Frontend
+Variables requeridas en `backend/.env`:
+```bash
+# JWT Configuration
+SECRET_KEY=your-secret-key-here
+ALGORITHM=HS256
+ACCESS_TOKEN_EXPIRE_MINUTES=1440
+
+# BigQuery Configuration
+GCP_PROJECT_ID=your-project-id
+GCP_DATASET=your-dataset
+# ... (credenciales GCP)
+
+# API Externa de Mantenimientos (NUEVO)
+MANTENIMIENTOS_API_URL=https://api-bd-eficiencia-energetica-853514779938.us-central1.run.app
+MANTENIMIENTOS_API_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+#### Frontend
+```bash
 cp frontend/.env.example frontend/.env
+```
+
+Variables en `frontend/.env`:
+```bash
+API_BASE_URL=http://localhost:8000
 ```
 
 ### Paso 3: Opción Docker (Recomendado)
@@ -98,20 +105,11 @@ docker-compose up --build
 
 ### Paso 3 Alternativa: Instalación Manual
 
-#### CRM Sync API
-```bash
-cd crm-sync-api
-python -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-uvicorn app.main:app --host 0.0.0.0 --port 8001
-```
-
 #### Backend
 ```bash
 cd backend
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # En Windows: venv\Scripts\activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
@@ -120,48 +118,44 @@ uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```bash
 cd frontend
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate  # En Windows: venv\Scripts\activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
 ## ⚙️ Configuración
 
-### Nuevas Variables de Entorno (Backend y CRM Sync API)
+### API Externa de Mantenimientos
 
+El sistema consume un API REST externa alojada en Google Cloud Platform para obtener datos de mantenimiento:
+
+- **URL Base**: `https://api-bd-eficiencia-energetica-853514779938.us-central1.run.app`
+- **Autenticación**: Bearer Token
+- **Endpoints**:
+  - `GET /mantenimientos` - Consultar mantenimientos
+  - `POST /mantenimientos` - Insertar nuevo mantenimiento
+
+**Formato de consulta**:
 ```bash
-# PostgreSQL Configuration
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=eficiencia_energetica
-POSTGRES_USER=tu_usuario
-POSTGRES_PASSWORD=tu_password
+curl -X GET "https://api-bd-eficiencia-energetica-853514779938.us-central1.run.app/mantenimientos?serial=in.(SERIAL1,SERIAL2)" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json"
 ```
 
-## 🔄 Sincronización CRM
-
-### Automática
-- Se ejecuta cada hora en punto
-- Sincroniza datos del CRM a PostgreSQL
-- Logs detallados de cada sincronización
-
-### Manual
-```bash
-curl -X POST http://localhost:8001/sync \
-  -H "Content-Type: application/json" \
-  -d '{"seriales": ["JK1142005099", "JK2117000712"]}'
+**Formato de respuesta**:
+```json
+[
+  {
+    "serial": "JK1142005099",
+    "datetime_maintenance_end": "2025-01-15T10:30:00",
+    "customer_name": "CLIENTE SA",
+    "device_brand": "APC",
+    "device_model": "MODELO-123"
+  }
+]
 ```
 
 ## 📚 API Endpoints
-
-### CRM Sync API (Puerto 8001)
-```
-GET  /health                    # Health check
-POST /sync                      # Forzar sincronización
-GET  /mantenimientos           # Obtener mantenimientos
-GET  /mantenimientos/metadata  # Obtener metadatos
-GET  /stats                    # Estadísticas de BD
-```
 
 ### Backend Principal (Puerto 8000)
 ```
@@ -170,21 +164,31 @@ GET  /api/v1/devices/list      # Lista de dispositivos
 GET  /api/v1/devices/top-priority  # Top dispositivos críticos
 GET  /api/v1/predictions/{dispositivo}  # Predicción individual
 GET  /api/v1/maintenance/recommendations  # Recomendaciones
+GET  /api/v1/maintenance/history/{serial}  # Historial de mantenimiento
 ```
 
 ## 🧪 Verificación
 
+### Verificar Backend
 ```bash
-# Verificar CRM Sync API
-curl http://localhost:8001/health
-curl http://localhost:8001/stats
-
-# Verificar Backend
+# Health check
 curl http://localhost:8000/health
 
-# Verificar PostgreSQL
-psql -h localhost -p 5432 -U tu_usuario -d eficiencia_energetica \
-  -c "SELECT COUNT(*) FROM mantenimientos;"
+# Estado del sistema
+curl http://localhost:8000/system/status
+```
+
+### Verificar Frontend
+```bash
+# Acceder en navegador
+http://localhost:8501
+```
+
+### Verificar API Externa
+```bash
+# Test de conexión
+curl -X GET "https://api-bd-eficiencia-energetica-853514779938.us-central1.run.app/mantenimientos?limit=1" \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ## 📊 Monitoreo
@@ -192,60 +196,70 @@ psql -h localhost -p 5432 -U tu_usuario -d eficiencia_energetica \
 ### Ver logs en tiempo real
 ```bash
 # Docker
-docker-compose logs -f crm-sync-api
 docker-compose logs -f backend
+docker-compose logs -f frontend
 
 # Manual
-tail -f crm-sync-api/logs/app.log
 tail -f backend/logs/app.log
+tail -f frontend/logs/app.log
 ```
 
 ## 🔒 Seguridad
 
 - ✅ JWT con tokens de 24 horas
-- ✅ Credenciales del CRM aisladas en CRM Sync API
+- ✅ Bearer Token para API externa
 - ✅ Variables sensibles en archivos .env
 - ✅ CORS configurado
 - ✅ Validación de entrada con Pydantic
 - ⚠️ Cambiar contraseñas por defecto en producción
 - ⚠️ Usar HTTPS en producción
+- ⚠️ Rotar tokens de API periódicamente
 
 ## 🐛 Troubleshooting
 
-### PostgreSQL Connection Refused
+### Error de conexión con API externa
 ```bash
-# Verificar servicio
-sudo systemctl status postgresql
+# Verificar token
+curl -X GET "https://api-bd-eficiencia-energetica-853514779938.us-central1.run.app/mantenimientos?limit=1" \
+  -H "Authorization: Bearer YOUR_TOKEN"
 
-# Verificar puerto
-netstat -an | grep 5432
+# Verificar conectividad
+ping api-bd-eficiencia-energetica-853514779938.us-central1.run.app
 ```
-
-### CRM Token Failed
-- Verificar credenciales en `.env`
-- Ver logs de CRM Sync API
-- Verificar conectividad al CRM
 
 ### Mantenimientos no aparecen
-```bash
-# Verificar datos en BD
-psql -h localhost -p 5432 -U tu_usuario -d eficiencia_energetica \
-  -c "SELECT COUNT(*) FROM mantenimientos;"
+1. Verificar token en `.env` del backend
+2. Ver logs del backend: `docker-compose logs backend`
+3. Verificar conectividad a API externa
+4. Verificar seriales en la consulta
 
-# Forzar sincronización
-curl -X POST http://localhost:8001/sync \
-  -H "Content-Type: application/json" \
-  -d '{"seriales": ["JK1142005099"]}'
-```
+### Token expirado
+El Bearer Token tiene fecha de expiración (`exp: 1751334720`). Si el token expira:
+1. Solicitar nuevo token al administrador del API
+2. Actualizar `MANTENIMIENTOS_API_TOKEN` en `backend/.env`
+3. Reiniciar el backend
 
 ## 📦 Estructura del Proyecto
 
 ```
 crac-monitoring-new/
 ├── backend/              # API principal FastAPI
-├── crm-sync-api/        # API sincronización CRM (NUEVO)
+│   ├── app/
+│   │   ├── api/         # Endpoints REST
+│   │   ├── services/    # Lógica de negocio
+│   │   │   ├── mantenimientos_api_client.py  # Cliente API Externa (NUEVO)
+│   │   │   ├── bigquery_service.py
+│   │   │   ├── ml_service.py
+│   │   │   └── ...
+│   │   └── ...
+│   ├── Dockerfile
+│   └── requirements.txt
 ├── frontend/            # Interfaz Streamlit
-├── database/            # Scripts SQL (NUEVO)
+│   ├── app.py
+│   ├── components/
+│   ├── services/
+│   ├── Dockerfile
+│   └── requirements.txt
 ├── docker-compose.yml   # Orquestación Docker
 └── README.md           # Este archivo
 ```
@@ -254,27 +268,33 @@ crac-monitoring-new/
 
 | Aspecto | Antes | Después |
 |---------|-------|---------|
-| **Performance** | 5-10s por consulta CRM | 0.1-0.3s desde PostgreSQL |
-| **Disponibilidad** | Depende del CRM | Datos cacheados en BD |
-| **Mantenibilidad** | Lógica mezclada | Servicios separados |
-| **Escalabilidad** | Limitada por CRM | Múltiples servicios |
+| **Mantenibilidad** | Microservicio separado | Cliente integrado en backend |
+| **Simplicidad** | 3 servicios independientes | 2 servicios principales |
+| **Confiabilidad** | Depende de PostgreSQL local | API externa gestionada en GCP |
+| **Escalabilidad** | Limitada por recursos locales | Aprovecha infraestructura cloud |
+| **Seguridad** | Credenciales PostgreSQL locales | Bearer Token renovable |
 
 ## 📝 Changelog
+
+### v3.0.0 (2025-01-XX)
+- ♻️ Refactorización: Eliminado componente `crm-sync-api`
+- ✨ Nuevo: Cliente para API REST de Mantenimientos (GCP)
+- 🔄 Cambio: Backend consume API externa en vez de PostgreSQL directo
+- ⚡ Mejora: Arquitectura más simple y mantenible
+- 📚 Docs: Actualización completa de documentación
 
 ### v2.0.0 (2025-01-XX)
 - ✨ Nuevo: CRM Sync API independiente
 - ✨ Nuevo: Integración con PostgreSQL
-- ✨ Nuevo: Sincronización automática cada hora
 - 🔄 Cambio: Backend consulta PostgreSQL en vez de CRM
-- ⚡ Mejora: Performance en consultas de mantenimiento (50x más rápido)
-- 📚 Docs: Guía de migración completa
+- ⚡ Mejora: Performance en consultas de mantenimiento
 
 ## 📞 Soporte
 
 Para problemas o preguntas:
 1. Revisar sección de Troubleshooting
-2. Consultar GUIA_MIGRACION.md
-3. Ver logs de los servicios
+2. Ver logs de los servicios
+3. Verificar conectividad con API externa
 4. Crear issue en GitHub
 
 ## 📝 Licencia
@@ -283,5 +303,6 @@ Propietario - Todos los derechos reservados
 
 ---
 
-**Versión**: 2.0.0  
+**Versión**: 3.0.0  
 **Última actualización**: 2025-01
+**API Externa**: GCP Cloud Run
